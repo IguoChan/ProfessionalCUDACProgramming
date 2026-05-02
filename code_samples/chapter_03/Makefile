@@ -1,4 +1,4 @@
-CU_APPS=simpleDivergence simpleDeviceQuery sumMatrix
+CU_APPS=simpleDivergence simpleDeviceQuery sumMatrix reduceInteger
 C_APPS=
 
 all: ${C_APPS} ${CU_APPS}
