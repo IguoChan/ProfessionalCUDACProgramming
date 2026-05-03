@@ -9,6 +9,8 @@
 - 默认输入规模: `1 << 24`，即 `16,777,216` 个 `int`
 - 默认 block size: `512`
 - 编译选项: 当前 `Makefile` 使用 `nvcc -g -G -arch=sm_89`
+- 实测 GPU: `NVIDIA GeForce RTX 4090`
+- `ncu`: Nsight Compute 2025.2.0.0
 
 编译命令：
 
@@ -19,7 +21,7 @@ make reduceInteger
 
 注意：`-G` 会生成 debug device code，Nsight Compute 会提示 debug mode。该模式适合学习源码、观察控制流和调试，但会明显影响真实性能。因此本文把重点放在不同 reduction 写法的相对差异，尤其是 warp 分化的来源、规模和优化方向。
 
-当前撰写环境执行 `./reduceInteger` 时返回 `no CUDA-capable device is detected`，因此本文没有填入实际 `ncu` 数值。下面给出完整采集命令和基于代码结构的分化推导；在有 CUDA GPU 的机器上运行命令即可补齐实测表格。
+本文中的实测数据来自 `NVIDIA GeForce RTX 4090`，运行日期为 2026-05-03。由于当前程序以 `-G` 编译，下面的 `ncu` 数值更适合用于同一编译配置下的横向比较，不应视为 release 构建的真实性能上限。
 
 ## 程序结构概览
 
@@ -34,6 +36,7 @@ make reduceInteger
 | `reduceUnrolling4` | 每线程先合并 4 个元素，再 interleaved 规约 | `4 * blockDim.x` | 更高的串行预合并，更多并行层级被消除 |
 | `reduceUnrolling8` | 每线程先合并 8 个元素，再 interleaved 规约 | `8 * blockDim.x` | 进一步降低 block 数和同步轮数的相对开销 |
 | `reduceUnrollWarps8` | `unrolling8` + 最后一个 warp 手工展开 | `8 * blockDim.x` | 消除最后几轮循环和 `__syncthreads()` |
+| `reduceUnrollWarps8New` | `unrolling8` + `__shfl_down_sync()` warp 规约 | `8 * blockDim.x` | 用 warp shuffle 替代最后一个 warp 的全局内存读写 |
 | `reduceCompleteUnrollWarps8` | `unrolling8` + block 内大步长规约完全展开 + warp 展开 | `8 * blockDim.x` | 消除循环控制开销 |
 | `reduceCompleteUnroll<iBlockSize>` | 模板完全展开 | `8 * blockDim.x` | block size 是编译期常量，便于编译器删分支 |
 
@@ -88,7 +91,7 @@ ncu \
 ncu \
   --metrics gpu__time_duration.sum \
   --kernel-name regex:reduce \
-  --launch-count 9 \
+  --launch-count 10 \
   --print-units base \
   --print-metric-name name \
   ./reduceInteger 512
@@ -104,51 +107,54 @@ ncu \
 ./reduceInteger 512
 ```
 
-预期程序会输出每个 kernel 的 `gpu_sum`，这些值都应与 `cpu_sum` 一致。可以把实测时间填入下表：
+程序会输出每个 kernel 的 `gpu_sum`，这些值都应与 `cpu_sum` 一致。本次实测如下：
 
 | Kernel | grid 配置 | block 配置 | 普通运行时间 | `gpu_sum == cpu_sum` |
 | --- | ---: | ---: | ---: | --- |
-| `reduceNeighbored` | `32768` | `512` | 待测 | 待测 |
-| `reduceNeighboredLess` | `32768` | `512` | 待测 | 待测 |
-| `reduceInterleaved` | `32768` | `512` | 待测 | 待测 |
-| `reduceUnrolling2` | `16384` | `512` | 待测 | 待测 |
-| `reduceUnrolling4` | `8192` | `512` | 待测 | 待测 |
-| `reduceUnrolling8` | `4096` | `512` | 待测 | 待测 |
-| `reduceUnrollWarps8` | `4096` | `512` | 待测 | 待测 |
-| `reduceCompleteUnrollWarps8` | `4096` | `512` | 待测 | 待测 |
-| `reduceCompleteUnroll<512>` | `4096` | `512` | 待测 | 待测 |
+| `reduceNeighbored` | `32768` | `512` | `0.001130 sec` | 是 |
+| `reduceNeighboredLess` | `32768` | `512` | `0.000504 sec` | 是 |
+| `reduceInterleaved` | `32768` | `512` | `0.000466 sec` | 是 |
+| `reduceUnrolling2` | `16384` | `512` | `0.000342 sec` | 是 |
+| `reduceUnrolling4` | `8192` | `512` | `0.000156 sec` | 是 |
+| `reduceUnrolling8` | `4096` | `512` | `0.000101 sec` | 是 |
+| `reduceUnrollWarps8` | `4096` | `512` | `0.000105 sec` | 是 |
+| `reduceUnrollWarps8New` | `4096` | `512` | `0.000184 sec` | 是 |
+| `reduceCompleteUnrollWarps8` | `4096` | `512` | `0.000105 sec` | 是 |
+| `reduceCompleteUnroll<512>` | `4096` | `512` | `0.000102 sec` | 是 |
 
 默认规模 `1 << 24` 与 `512`、`2 * 512`、`4 * 512`、`8 * 512` 都整除，因此默认配置下 unrolling kernel 的边界判断理论上不会出现尾部不完整 block。这能让分析重点集中在规约模式本身，而不是尾部越界处理。
 
 ## ncu 结果记录表
 
-建议先用默认 `blocksize=512` 填入以下表格：
+默认 `blocksize=512` 的实测结果如下：
 
 | Kernel | `gpu__time_duration.sum` | `divergent.sum` | `uniform.pct` | branch inst | thread/inst | barrier stall | branch resolving stall |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `reduceNeighbored` | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 |
-| `reduceNeighboredLess` | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 |
-| `reduceInterleaved` | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 |
-| `reduceUnrolling2` | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 |
-| `reduceUnrolling4` | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 |
-| `reduceUnrolling8` | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 |
-| `reduceUnrollWarps8` | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 |
-| `reduceCompleteUnrollWarps8` | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 |
-| `reduceCompleteUnroll<512>` | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 | 待测 |
+| `reduceNeighbored` | `801824 ns` | `3145728` | `90.32%` | `44531712` | `24.12` | `17.67%` | `2.64%` |
+| `reduceNeighboredLess` | `561600 ns` | `196608` | `99.29%` | `33718272` | `30.70` | `56.89%` | `1.21%` |
+| `reduceInterleaved` | `532864 ns` | `196608` | `99.29%` | `33718272` | `30.81` | `54.34%` | `1.28%` |
+| `reduceUnrolling2` | `292448 ns` | `98304` | `99.30%` | `17121280` | `30.94` | `46.74%` | `1.10%` |
+| `reduceUnrolling4` | `174144 ns` | `49152` | `99.30%` | `8560640` | `31.08` | `40.01%` | `0.93%` |
+| `reduceUnrolling8` | `123744 ns` | `24576` | `99.30%` | `4280320` | `31.23` | `29.69%` | `0.66%` |
+| `reduceUnrollWarps8` | `123040 ns` | `4096` | `99.74%` | `1970176` | `31.87` | `13.11%` | `0.48%` |
+| `reduceUnrollWarps8New` | `129408 ns` | `4096` | `99.75%` | `2011136` | `31.91` | `13.01%` | `0.60%` |
+| `reduceCompleteUnrollWarps8` | `119648 ns` | `4096` | `99.70%` | `1839104` | `31.86` | `12.85%` | `0.45%` |
+| `reduceCompleteUnroll<512>` | `120320 ns` | `4096` | `99.69%` | `1773568` | `31.85` | `13.64%` | `0.43%` |
 
 内存吞吐可以单独记录：
 
 | Kernel | L1TEX global load 吞吐 | DRAM 读吞吐 | DRAM 写吞吐 | 备注 |
 | --- | ---: | ---: | ---: | --- |
-| `reduceNeighbored` | 待测 | 待测 | 待测 | 多轮全局内存原地写回 |
-| `reduceNeighboredLess` | 待测 | 待测 | 待测 | 访存位置仍是相邻配对 |
-| `reduceInterleaved` | 待测 | 待测 | 待测 | 右半段折叠到左半段 |
-| `reduceUnrolling2` | 待测 | 待测 | 待测 | 初始读取 2 份输入 |
-| `reduceUnrolling4` | 待测 | 待测 | 待测 | 初始读取 4 份输入 |
-| `reduceUnrolling8` | 待测 | 待测 | 待测 | 初始读取 8 份输入 |
-| `reduceUnrollWarps8` | 待测 | 待测 | 待测 | 最后 warp 阶段展开 |
-| `reduceCompleteUnrollWarps8` | 待测 | 待测 | 待测 | 循环完全展开 |
-| `reduceCompleteUnroll<512>` | 待测 | 待测 | 待测 | 模板实例化 |
+| `reduceNeighbored` | `667.88 GB/s` | `86.90 GB/s` | `54.06 GB/s` | 多轮全局内存原地写回 |
+| `reduceNeighboredLess` | `955.08 GB/s` | `123.56 GB/s` | `61.12 GB/s` | 访存位置仍是相邻配对 |
+| `reduceInterleaved` | `261.83 GB/s` | `129.56 GB/s` | `18.70 GB/s` | 右半段折叠到左半段 |
+| `reduceUnrolling2` | `467.50 GB/s` | `232.91 GB/s` | `33.05 GB/s` | 初始读取 2 份输入 |
+| `reduceUnrolling4` | `587.95 GB/s` | `390.41 GB/s` | `0.34 GB/s` | 初始读取 4 份输入 |
+| `reduceUnrolling8` | `688.18 GB/s` | `546.39 GB/s` | `16.01 GB/s` | 初始读取 8 份输入 |
+| `reduceUnrollWarps8` | `724.65 GB/s` | `553.35 GB/s` | `0.09 GB/s` | 最后 warp 阶段展开 |
+| `reduceUnrollWarps8New` | `646.84 GB/s` | `527.72 GB/s` | `12.86 GB/s` | 最后 warp 阶段使用 shuffle |
+| `reduceCompleteUnrollWarps8` | `739.36 GB/s` | `564.85 GB/s` | `17.21 GB/s` | 循环完全展开 |
+| `reduceCompleteUnroll<512>` | `738.57 GB/s` | `562.42 GB/s` | `16.09 GB/s` | 模板实例化 |
 
 ## 并行规约中的分化来源
 
