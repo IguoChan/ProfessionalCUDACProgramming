@@ -29,3 +29,7 @@ code_samples/chapter_03/nestedHelloWorldNew
 code_samples/chapter_03/nestedReduce
 code_samples/chapter_03/nestedReduceNosync
 code_samples/chapter_03/nestedReduce2
+code_samples/chapter_04/globalVariable
+code_samples/chapter_04/memTransfer
+code_samples/chapter_04/pinMemTransfer
+code_samples/chapter_04/sumArrayZerocpy
