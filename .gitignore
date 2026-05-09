@@ -32,4 +32,11 @@ code_samples/chapter_03/nestedReduce2
 code_samples/chapter_04/globalVariable
 code_samples/chapter_04/memTransfer
 code_samples/chapter_04/pinMemTransfer
+code_samples/chapter_04/readSegment
+code_samples/chapter_04/readSegment_ca
+code_samples/chapter_04/readSegment_cg
+code_samples/chapter_04/readSegment_default
+code_samples/chapter_04/simpleMathAoS
+code_samples/chapter_04/simpleMathSoA
 code_samples/chapter_04/sumArrayZerocpy
+code_samples/chapter_04/writeSegment

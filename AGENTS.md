@@ -4,7 +4,7 @@
 
 This repository contains CUDA C examples organized by book chapter under `code_samples/`.
 
-- `code_samples/chapter_01/`, `chapter_02/`, and `chapter_03/` contain standalone sample programs and a chapter-local `Makefile`.
+- `code_samples/chapter_01/`, `chapter_02/`, `chapter_03/`, and `chapter_04/` contain standalone sample programs and a chapter-local `Makefile`.
 - `code_samples/common/common.h` contains shared CUDA error-checking macros and timing helpers.
 - Sample executables are built next to their source files. Run `make clean` in the chapter directory before committing build outputs.
 
