@@ -1,4 +1,5 @@
-CU_APPS=globalVariable memTransfer pinMemTransfer readSegment simpleMathAoS simpleMathSoA sumArrayZerocpy writeSegment
+CU_APPS=globalVariable memTransfer pinMemTransfer readSegment simpleMathAoS simpleMathSoA \
+			sumArrayZerocpy writeSegment readSegmentUnroll
 READSEGMENT_CACHE_APPS=readSegment_ca readSegment_cg
 C_APPS=
 
